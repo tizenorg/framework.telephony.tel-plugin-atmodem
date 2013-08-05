@@ -194,8 +194,8 @@ void reverseIntermediates(struct ATResponse *p_response)
 
 void printResponse(void)
 {
-   	struct ATLine *pcur= NULL;
-   	struct ATLine *pnext= NULL;
+	struct ATLine *pcur= NULL;
+	struct ATLine *pnext= NULL;
 	int count =0;
 
 	printf("sp_response.success : %d\n", sp_response->success);
@@ -211,7 +211,7 @@ void printResponse(void)
 
 
 	pcur = sp_response->p_intermediates;
-	
+
 	if(pcur ==NULL)
 	{
 		printf("sp_response.p_intermediates : NULL\n");
@@ -220,7 +220,7 @@ void printResponse(void)
 	while(pcur != NULL)
 	{
 		printf("sp_response.p_intermediates[%d] : %s\n",count,pcur->line);
-		pnext = pcur->p_next;	
+		pnext = pcur->p_next;
 		pcur = pnext;
 		count++;
 	}
