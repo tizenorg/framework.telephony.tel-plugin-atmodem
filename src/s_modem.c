@@ -17,6 +17,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,19 +32,12 @@
 #include <co_modem.h>
 #include <storage.h>
 #include <server.h>
+#include <at.h>
 
 #include "s_common.h"
 #include "s_modem.h"
 
-#include "atchannel.h"
-#include "at_tok.h"
-
-#define MAX_VERSION_LEN	32
-#define TAPI_MISC_ME_SN_LEN_MAX		32
-#define TAPI_MISC_PRODUCT_CODE_LEN_MAX		32
-#define TAPI_MISC_MODEL_ID_LEN_MAX		17
-#define TAPI_MISC_PRL_ERI_VER_LEN_MAX		17
-
+#if 0
 enum cp_state {
 	CP_STATE_OFFLINE,
 	CP_STATE_CRASH_RESET,
@@ -54,81 +48,7 @@ enum cp_state {
 	CP_STATE_LOADER_DONE,
 };
 
-
-enum TelMiscSNIndexType_t{
-	TAPI_MISC_ME_IMEI = 0x00, /**< 0x00: IMEI, GSM/UMTS device */
-	TAPI_MISC_ME_ESN = 0x01, /**< 0x01: ESN(Electronic Serial Number), It`s essentially run out. CDMA device */
-	TAPI_MISC_ME_MEID = 0x02, /**< 0x02: MEID, This value can have hexa decimal digits. CDMA device */
-	TAPI_MISC_ME_MAX = 0xff /**< 0xff: reserved */
-};
-
-struct TelMiscSNInformation{
-	enum TelMiscSNIndexType_t sn_index; /**< serial number index */
-	int sn_len; /**< Length */
-	unsigned char szNumber[TAPI_MISC_ME_SN_LEN_MAX]; /**< Number */
-};
-
-/**
- * Mobile Equipment Version Information
- */
-struct TelMiscVersionInformation{
-	unsigned char ver_mask; /**< version mask  - 0x01:SW_ver, 0x02:HW_ver, 0x04:RF_CAL_date, 0x08:Product_code, 0x10:Model_ID, 0x20:PRL, 0x04:ERI, 0xff:all */
-	unsigned char szSwVersion[MAX_VERSION_LEN]; /**< Software version, null termination */
-	unsigned char szHwVersion[MAX_VERSION_LEN]; /**< Hardware version, null termination */
-	unsigned char szRfCalDate[MAX_VERSION_LEN]; /**< Calculation Date, null termination */
-	unsigned char szProductCode[TAPI_MISC_PRODUCT_CODE_LEN_MAX]; /**< product code, null termination */
-	unsigned char szModelId[TAPI_MISC_MODEL_ID_LEN_MAX]; /**< model id (only for CDMA), null termination */
-	unsigned char prl_nam_num; /**< number of PRL NAM fields */
-	unsigned char szPrlVersion[TAPI_MISC_PRL_ERI_VER_LEN_MAX * 3];/**< prl version (only for CDMA), null termination */
-	unsigned char eri_nam_num; /**< number of PRL NAM fields */
-	unsigned char szEriVersion[TAPI_MISC_PRL_ERI_VER_LEN_MAX * 3];/**< eri version (only for CDMA), null termination */
-};
-
-extern struct ATResponse *sp_response;
-extern char *s_responsePrefix;
-extern enum ATCommandType s_type;
-
-static void on_confirmation_modem_message_send(TcorePending *p, gboolean result, void *user_data ); // from Kernel
-
-static void on_confirmation_modem_message_send( TcorePending *p, gboolean result, void *user_data )
-{
-	UserRequest* ur = NULL;
-	struct ATReqMetaInfo* metainfo = NULL;
-	unsigned int info_len =0;
-	dbg("on_confirmation_modem_message_send - msg out from queue. alloc ATRsp buffer & write rspPrefix if needed\n");
-
-	ReleaseResponse(); // release leftover
-//alloc new sp_response
-	sp_response = at_response_new();
-
-
-	ur = tcore_pending_ref_user_request(p);
-	metainfo = (struct ATReqMetaInfo*)tcore_user_request_ref_metainfo(ur,&info_len);
-
-	if((metainfo->type == SINGLELINE)||
-		(metainfo->type == MULTILINE))
-	{
-		//cp rsp prefix
-		s_responsePrefix = strdup(metainfo->responsePrefix);
-		dbg("duplicating responsePrefix : %s\n", s_responsePrefix);
-	}
-	else
-	{
-		s_responsePrefix = NULL;
-	}
-
-//set atcmd type into s_type
-	s_type = metainfo->type;
-
-	if (result == FALSE) {
-		/* Fail */
-		dbg("SEND FAIL");
-	}
-	else {
-		dbg("SEND OK");
-	}
-}
-static gboolean on_sys_event_modem_power(CoreObject *o, const void *event_info, void *user_data)
+static gboolean on_sys_event_modem_power(CoreObject *co_modem, const void *event_info, void *user_data)
 {
 	struct tnoti_modem_power modem_power;
 	enum cp_state *state;
@@ -138,7 +58,7 @@ static gboolean on_sys_event_modem_power(CoreObject *o, const void *event_info, 
 
 	if ( *state == CP_STATE_OFFLINE || *state == CP_STATE_CRASH_RESET ) {
 
-		tcore_modem_set_powered(o, FALSE);
+		tcore_modem_set_powered(co_modem, FALSE);
 
 		if ( *state == CP_STATE_OFFLINE )
 			modem_power.state = MODEM_STATE_OFFLINE;
@@ -150,13 +70,15 @@ static gboolean on_sys_event_modem_power(CoreObject *o, const void *event_info, 
 		return TRUE;
 	}
 
-	tcore_server_send_notification(tcore_plugin_ref_server(tcore_object_ref_plugin(o)), o, TNOTI_MODEM_POWER,
+	tcore_server_send_notification(tcore_plugin_ref_server(tcore_object_ref_plugin(co_modem)), co_modem, TNOTI_MODEM_POWER,
 			sizeof(struct tnoti_modem_power), &modem_power);
 
 	return TRUE;
 }
+#endif
 
-static gboolean on_event_modem_power(CoreObject *o, const void *event_info, void *user_data)
+static gboolean on_event_modem_power(CoreObject *co_modem,
+	const void *event_info, void *user_data)
 {
 	struct treq_modem_set_flightmode flight_mode_set;
 	struct tnoti_modem_power modem_power;
@@ -164,521 +86,453 @@ static gboolean on_event_modem_power(CoreObject *o, const void *event_info, void
 	TcoreHal *h;
 	Storage *strg;
 
-	strg = tcore_server_find_storage(tcore_plugin_ref_server(tcore_object_ref_plugin(o)), "vconf");
+	strg = tcore_server_find_storage(tcore_plugin_ref_server(tcore_object_ref_plugin(co_modem)), "vconf");
 	flight_mode_set.enable = tcore_storage_get_bool(strg, STORAGE_KEY_FLIGHT_MODE_BOOL);
 
-	h = tcore_object_get_hal(o);
+	h = tcore_object_get_hal(co_modem);
 
 	tcore_hal_set_power_state(h, TRUE);
 
 	ur = tcore_user_request_new(NULL, NULL);
 	tcore_user_request_set_data(ur, sizeof(struct treq_modem_set_flightmode), &flight_mode_set);
 	tcore_user_request_set_command(ur, TREQ_MODEM_SET_FLIGHTMODE);
-	tcore_object_dispatch_request(o, ur);
+	tcore_object_dispatch_request(co_modem, ur);
 
+#if 0	/* To be opened later */
 	ur = tcore_user_request_new(NULL, NULL);
 	tcore_user_request_set_command(ur, TREQ_MODEM_GET_IMEI);
-	tcore_object_dispatch_request(o, ur);
+	tcore_object_dispatch_request(co_modem, ur);
 
 	ur = tcore_user_request_new(NULL, NULL);
 	tcore_user_request_set_command(ur, TREQ_MODEM_GET_VERSION);
-	tcore_object_dispatch_request(o, ur);
-
-	tcore_modem_set_powered(o, TRUE);
+	tcore_object_dispatch_request(co_modem, ur);
+#endif
+	tcore_modem_set_powered(co_modem, TRUE);
 
 	modem_power.state = MODEM_STATE_ONLINE;
 
-	tcore_server_send_notification(tcore_plugin_ref_server(tcore_object_ref_plugin(o)), o, TNOTI_MODEM_POWER,
-			sizeof(struct tnoti_modem_power), &modem_power);
+	/* Send notification */
+	tcore_server_send_notification(tcore_plugin_ref_server(tcore_object_ref_plugin(co_modem)),
+		co_modem,
+		TNOTI_MODEM_POWER,
+		sizeof(struct tnoti_modem_power), &modem_power);
 
 	return TRUE;
 }
 
-static gboolean on_event_modem_phone_state(CoreObject *o, const void *event_info, void *user_data)
+static gboolean on_event_modem_phone_state(CoreObject *co_modem,
+	const void *event_info, void *user_data)
 {
-	char* line = (char*)event_info;
-	GQueue *queue;
-	UserRequest *ur;
-	int err, status;
-	struct tresp_modem_set_flightmode res;
-	const struct treq_modem_set_flightmode *req_data = NULL;
-	#define SCFUN_MIN_FUNC 0
-	#define SCFUN_FULL_FUNC 1
+	GSList *lines = (GSList *)event_info;
+	const gchar *line;
 
-	dbg("received notification : %s", line);
+	dbg("Modem Power notification - [+SCFUN]");
 
-	at_tok_start(&line);
-
-	err = at_tok_nextint(&line, &status);
-
-	switch (status) {
-		case SCFUN_MIN_FUNC:
-			res.result = 0x01;
-			tcore_modem_set_flight_mode_state(o, TRUE);
-			break;
-
-		case SCFUN_FULL_FUNC:
-			res.result = 0x02;
-			tcore_modem_set_flight_mode_state(o, FALSE);
-			break;
+	if (g_slist_length((GSList *)lines) != 1) {
+		err("+SCFUN unsolicited message expected to be "
+			"Single line but received multiple lines");
+		return TRUE;
 	}
 
-	queue = tcore_object_ref_user_data(o);
-	if (queue) {
-		ur = util_pop_waiting_job(queue, ID_RESERVED_AT);
-		if (tcore_user_request_ref_communicator(ur)) {
-			req_data = tcore_user_request_ref_data(ur, NULL);
-			if (TRUE == req_data->enable) {
-				res.result = 1;
-				tcore_modem_set_flight_mode_state(o, TRUE);
-			} else {
-				res.result = 2;
-				tcore_modem_set_flight_mode_state(o, FALSE);
-			}
-			tcore_user_request_send_response(ur, TRESP_MODEM_SET_FLIGHTMODE, sizeof(struct tresp_modem_set_flightmode), &res);
-		}
+	line = (const gchar *)lines->data;
+	if (line != NULL) {
+		GSList *tokens;
+		char *resp;
+		guint state = 0;
+
+		tokens = tcore_at_tok_new(line);
+		resp = g_slist_nth_data(tokens, 0);
+		dbg("resp: [%s]", resp);
+
+		/* <CP state> */
+		if (resp)
+			state = atoi(resp);
+		dbg("Flight mode State: [%s]", (state ? "OFF" : "ON"));
+
+		/* Set Flight mode */
+		tcore_modem_set_flight_mode_state(co_modem, !state);
+
+		tcore_at_tok_free(tokens);
 	}
+
 	return TRUE;
 }
 
-static void on_response_poweron(TcorePending *p, int data_len, const void *data, void *user_data)
+/* Modem Responses */
+static void on_response_poweron(TcorePending *p,
+	int data_len, const void *data, void *user_data)
 {
-	printResponse();
+	const struct tcore_at_response *at_resp = data;
 
-	if(sp_response->success > 0) {
+	if(at_resp && at_resp->success > 0) {
 		dbg("RESPONSE OK");
-		ReleaseResponse();
 		on_event_modem_power(tcore_pending_ref_core_object(p), NULL, NULL);
 	} else{
 		dbg("RESPONSE NOK");
-		ReleaseResponse();
-		s_modem_send_poweron(tcore_object_ref_plugin(tcore_pending_ref_core_object(p)));
+		s_modem_send_poweron(tcore_pending_ref_plugin(p));
 	}
 }
 
-static void on_response_set_flight_mode(TcorePending *p, int data_len, const void *data, void *user_data)
+static void on_response_modem_set_flight_mode(TcorePending *p,
+	int data_len, const void *data, void *user_data)
 {
-	CoreObject *o = user_data;
-	UserRequest *ur;
-	struct tresp_modem_set_flightmode res;
-	GQueue *queue;
+	const struct tcore_at_response *at_resp = data;
+	CoreObject *co_modem = NULL;
+	UserRequest *ur = NULL;
+	struct tresp_modem_set_flightmode flight_resp = {0, };
+	const struct treq_modem_set_flightmode *flight_req;
 
-//print sp_response - for debug
-	printResponse();
+	dbg("Enter");
+
+	co_modem = tcore_pending_ref_core_object(p);
 	ur = tcore_pending_ref_user_request(p);
+	flight_req = tcore_user_request_ref_data(ur, NULL);
+	dbg("req_data->enable: [%d]", flight_req->enable);
 
-	if (sp_response->success > 0) {
-		dbg("RESPONSE OK");
-		//parse response
-		queue = tcore_object_ref_user_data(o);
-		if (queue) {
-			ur = tcore_user_request_ref(ur);
-			util_add_waiting_job(queue, ID_RESERVED_AT, ur);
+	if (at_resp && at_resp->success) {
+		Storage *strg;
+		gboolean flight_mode_state = FALSE;
+
+		if (flight_req->enable == 1)
+			flight_mode_state = TRUE;
+
+		strg = tcore_server_find_storage(tcore_plugin_ref_server(tcore_object_ref_plugin(co_modem)), "vconf");
+		tcore_storage_set_bool(strg, STORAGE_KEY_FLIGHT_MODE_BOOL, flight_mode_state);
+
+		flight_resp.result = TCORE_RETURN_SUCCESS;
+
+		/* Update Core Object */
+		(void)tcore_modem_set_flight_mode_state(co_modem, flight_mode_state);
+	} else
+		flight_resp.result = TCORE_RETURN_FAILURE;
+
+	dbg("Setting Modem Flight mode - [%s] - [%s]",
+		((flight_req->enable == 1) ? "ON": "OFF"),
+		(flight_resp.result == TCORE_RETURN_SUCCESS ? "SUCCESS" : "FAIL"));
+
+	if (ur) {
+		if (tcore_user_request_ref_communicator(ur) != NULL) {
+			/* Send Response */
+			tcore_user_request_send_response(ur,
+				TRESP_MODEM_SET_FLIGHTMODE,
+				sizeof(struct tresp_modem_set_flightmode), &flight_resp);
+		} else if (flight_resp.result == TCORE_RETURN_SUCCESS) {
+			struct tnoti_modem_flight_mode flight_mode;
+
+			/* Boot-up Request */
+			err("ur is NULL");
+
+			memset(&flight_mode, 0x0, sizeof(struct tnoti_modem_flight_mode));
+
+			flight_mode.enable = flight_req->enable;
+			dbg("Boot-up: Modem Flight mode - [%s]",
+				(flight_req->enable ? "ON": "OFF"));
+
+			/* Send notification */
+			tcore_server_send_notification(tcore_plugin_ref_server(tcore_object_ref_plugin(co_modem)),
+				co_modem,
+				TNOTI_MODEM_FLIGHT_MODE,
+				sizeof(struct tnoti_modem_flight_mode), &flight_mode);
 		}
+	}
+	else {
+		err("ur is NULL");
+	}
+}
 
-		ReleaseResponse();
+static void on_response_modem_get_imei(TcorePending *p,
+	int data_len, const void *data, void *user_data)
+{
+	const struct tcore_at_response *at_resp = data;
+	UserRequest *ur = NULL;
+	struct tresp_modem_get_imei imei_resp= {0, };
+
+	dbg("Enter");
+
+	if (at_resp) {
+		if (at_resp->lines) {
+			const gchar *line;
+			GSList *tokens = NULL;
+
+			line = (const gchar *)at_resp->lines->data;
+			tokens = tcore_at_tok_new(line);
+			if (g_slist_length(tokens) == 1) {
+				if (at_resp->success) {
+					dbg("RESPONSE - [OK]");
+					g_strlcpy(imei_resp.imei,
+						(const gchar *)g_slist_nth_data(tokens, 0),
+						16+1);
+					dbg("IMEI: [%s]", imei_resp.imei);
+
+					imei_resp.result = TCORE_RETURN_SUCCESS;
+				} else {
+					err("RESPONSE - [NOK]");
+					err("[%s]", g_slist_nth_data(tokens, 0));
+				}
+			}  else {
+				err("Invalid response message");
+				imei_resp.result = TCORE_RETURN_FAILURE;
+			}
+			tcore_at_tok_free(tokens);
+		}
+	}
+
+	ur = tcore_pending_ref_user_request(p);
+	if (ur) {
+		tcore_user_request_send_response(ur,
+			TRESP_MODEM_GET_IMEI,
+			sizeof(struct tresp_modem_get_imei),
+			&imei_resp);
 	} else {
-		dbg("RESPONSE NOK");
-		res.result = 3;
-
-		ReleaseResponse();
-
-		tcore_user_request_send_response(ur, TRESP_MODEM_SET_FLIGHTMODE, sizeof(struct tresp_modem_set_flightmode), &res);
+		err("ur is NULL");
 	}
+
 }
-static void on_response_imei(TcorePending *p, int data_len, const void *data, void *user_data)
+
+static void on_response_modem_get_version(TcorePending *p,
+	int data_len, const void *data, void *user_data)
 {
-	TcorePlugin *plugin;
-	struct tresp_modem_get_imei res;
-	UserRequest *ur;
-	struct TelMiscSNInformation *imei_property;
-	char *line;
-	int response;
-	int err;
+	const struct tcore_at_response *at_resp = data;
+	UserRequest *ur = NULL;
+	struct tresp_modem_get_version version_resp= {0, };
 
-	printResponse();
+	dbg("Enter");
 
-	memset(&res, 0, sizeof(struct tresp_modem_get_imei));
+	if (at_resp) {
+		if (at_resp->lines) {
+			const gchar *line;
+			GSList *tokens = NULL;
 
-	if(sp_response->success > 0)
-	{
-		dbg("RESPONSE OK");
+			line = (const gchar *)at_resp->lines->data;
+			tokens = tcore_at_tok_new(line);
+			if (g_slist_length(tokens) > 0) {
+				if (at_resp->success) {
+					gchar *sw_ver = NULL, *hw_ver = NULL;
+					gchar *calib_date = NULL, *p_code = NULL;
 
-		line = sp_response->p_intermediates->line;
+					sw_ver = g_slist_nth_data(tokens, 0);
+					hw_ver = g_slist_nth_data(tokens, 1);
+					calib_date = g_slist_nth_data(tokens, 2);
+					p_code = g_slist_nth_data(tokens, 3);
 
-		res.result = TCORE_RETURN_SUCCESS;
-		strncpy(res.imei, line, 16);
+					g_strlcpy(version_resp.software,
+						sw_ver, 32 + 1);
+					g_strlcpy(version_resp.hardware,
+						hw_ver, 32 + 1);
+					g_strlcpy(version_resp.calibration,
+						calib_date, 32 + 1);
+					g_strlcpy(version_resp.product_code,
+						p_code, 32 + 1);
 
-		dbg("imei = [%s]", res.imei);
+					dbg("Version - Software: [%s] Hardware: [%s] "
+						"Calibration date: [%s] Product Code: [%s]",
+						sw_ver, hw_ver, calib_date, p_code);
 
-		plugin = tcore_pending_ref_plugin(p);
-		imei_property = tcore_plugin_ref_property(plugin, "IMEI");
-		if (imei_property)
-		{
-			imei_property->sn_index = TAPI_MISC_ME_IMEI;
-			imei_property->sn_len = strlen(res.imei);
-			memcpy(imei_property->szNumber, res.imei, imei_property->sn_len);
+					version_resp.result = TCORE_RETURN_SUCCESS;
+				} else {
+					err("RESPONSE - [NOK]");
+					err("[%s]", g_slist_nth_data(tokens, 0));
+				}
+			} else {
+				err("Invalid response message");
+					version_resp.result = TCORE_RETURN_FAILURE;
+			}
+
+			/* Free resources */
+			tcore_at_tok_free(tokens);
 		}
 	}
-	else
-	{
-		dbg("RESPONSE NOK");
-		line = sp_response->finalResponse;
-
-		err = at_tok_start(&line);
-		if (err < 0)
-		{
-			dbg("err cause not specified or string corrupted");
-			   res.result = TCORE_RETURN_3GPP_ERROR;
-		}
-		else
-		{
-			err = at_tok_nextint(&line, &response);
-			if (err < 0)
-			{
-				dbg("err not specified or string not contail error");
-				res.result = TCORE_RETURN_3GPP_ERROR;
-			}
-			else
-			{
-				res.result = convertCMEError((enum ATCMEError)response);
-			}
-		}
-	}
-
-	ReleaseResponse();
 
 	ur = tcore_pending_ref_user_request(p);
-	tcore_user_request_send_response(ur, TRESP_MODEM_GET_IMEI, sizeof(struct tresp_modem_get_imei), &res);
-
-}
-
-static void on_response_version(TcorePending *p, int data_len, const void *data, void *user_data)
-{
-	TcorePlugin *plugin;
-	struct TelMiscVersionInformation *vi;
-	struct TelMiscVersionInformation *vi_property;
-	struct tresp_modem_get_version res;
-	UserRequest *ur;
-	char* line=NULL;
-	char *swver= NULL,*hwver=NULL, *caldate=NULL,*pcode=NULL,*id=NULL;
-
-	int response, err;
-
-	printResponse();
-
-#define AT_VER_LEN 20
-	if(sp_response->success > 0)
-	{
-		dbg("RESPONSE OK");
-
-		line = sp_response->p_intermediates->line;
-		err = at_tok_start(&line);
-
-		err = at_tok_nextstr(&line,&swver);
-		if(swver!=NULL)
-			err = at_tok_nextstr(&line,&hwver);
-		if(hwver!=NULL)
-			err = at_tok_nextstr(&line,&caldate);
-		if(caldate !=NULL)
-			err = at_tok_nextstr(&line,&pcode);
-		if(pcode !=NULL)
-			err = at_tok_nextstr(&line,&id);
-
-		dbg("version: sw=[%s], hw=[%s], rf_cal=[%s], product_code=[%s], model_id=[%s]", swver, hwver, caldate, pcode, id);
-
-		vi = calloc(sizeof(struct TelMiscVersionInformation), 1);
-		memcpy(vi->szSwVersion, swver, strlen(swver));
-		memcpy(vi->szHwVersion, hwver, strlen(hwver));
-		memcpy(vi->szRfCalDate, caldate, strlen(caldate));
-		memcpy(vi->szProductCode, pcode,strlen(pcode));
-		memcpy(vi->szModelId, id, strlen(id));
-
-		memset(&res, 0, sizeof(struct tresp_modem_get_imei));
-		snprintf(res.software, (AT_VER_LEN >strlen(swver) ?strlen(swver):AT_VER_LEN), "%s", swver);
-		snprintf(res.hardware, (AT_VER_LEN >strlen(hwver) ?strlen(hwver):AT_VER_LEN), "%s", hwver);
-
-		plugin = tcore_pending_ref_plugin(p);
-		vi_property = tcore_plugin_ref_property(plugin, "VERSION");	
-		memcpy(vi_property, vi, sizeof(struct TelMiscVersionInformation));
+	if (ur) {
+		tcore_user_request_send_response(ur,
+			TRESP_MODEM_GET_VERSION,
+			sizeof(struct tresp_modem_get_version), &version_resp);
+	} else {
+		err("ur is NULL");
 	}
-	else
-	{
-		dbg("RESPONSE NOK");
-		line = sp_response->finalResponse;
-
-		memset(&res, 0, sizeof(struct tresp_modem_get_version));
-
-		err = at_tok_start(&line);
-		if (err < 0)
-		{
-			dbg("err cause not specified or string corrupted");
-			   res.result = TCORE_RETURN_3GPP_ERROR;
-		}
-		else
-		{
-			err = at_tok_nextint(&line, &response);
-			if (err < 0)
-			{
-				dbg("err not specified or string not contail error");
-				res.result = TCORE_RETURN_3GPP_ERROR;
-			}
-			else
-			{
-				res.result = convertCMEError((enum ATCMEError)response);
-			}
-		}
-	}
-
-	ReleaseResponse();
-
-	ur = tcore_pending_ref_user_request(p);
-	tcore_user_request_send_response(ur, TRESP_MODEM_GET_VERSION, sizeof(struct tresp_modem_get_version), &res);
-
 }
 
-static TReturn power_on(CoreObject *o, UserRequest *ur)
+/*  Requests  */
+static TReturn power_on(CoreObject *co_modem, UserRequest *ur)
 {
+	dbg("Modem Power ON request: NOT supported!!!");
 
-	return TCORE_RETURN_SUCCESS;
+	return TCORE_RETURN_ENOSYS;
 }
 
-static TReturn power_off(CoreObject *o, UserRequest *ur)
+static TReturn power_off(CoreObject *co_modem, UserRequest *ur)
 {
 	struct tnoti_modem_power modem_power;
 	modem_power.state = MODEM_STATE_OFFLINE;
 
-	tcore_modem_set_powered(o, FALSE);
+	tcore_modem_set_powered(co_modem, FALSE);
 
-	tcore_server_send_notification( tcore_plugin_ref_server(tcore_object_ref_plugin(o)), o, TNOTI_MODEM_POWER,
-			sizeof(struct tnoti_modem_power), &modem_power);
-
-	return TCORE_RETURN_SUCCESS;
-}
-static TReturn power_reset(CoreObject *o, UserRequest *ur)
-{
-
-	return TCORE_RETURN_SUCCESS;
-}
-static TReturn get_imei(CoreObject *o, UserRequest *ur)
-{
-	TcorePlugin *p = NULL;
-	TcoreHal *h = NULL;
-	TcorePending *pending = NULL;
-	char* cmd_str = NULL;
-	struct ATReqMetaInfo metainfo;
-	int info_len =0;
-
-	p = tcore_object_ref_plugin(o);
-	h = tcore_object_get_hal(o);
-
-	memset(&metainfo, 0, sizeof(struct ATReqMetaInfo));
-	metainfo.type = NUMERIC;
-	metainfo.responsePrefix[0] ='\0';
-	info_len = sizeof(struct ATReqMetaInfo);
-
-	tcore_user_request_set_metainfo(ur, info_len, &metainfo);
-
-	cmd_str = g_strdup("AT+CGSN\r");
-	dbg("cmd : %s, prefix(if any) : %s, cmd_len : %d",cmd_str, "N/A", strlen(cmd_str));
-
-	pending = tcore_pending_new(o, ID_RESERVED_AT);
-	tcore_pending_set_request_data(pending, strlen(cmd_str), cmd_str);
-	free(cmd_str);
-	tcore_pending_set_timeout(pending, 0);
-	tcore_pending_set_response_callback(pending, on_response_imei, NULL);
-	tcore_pending_link_user_request(pending, ur);
-	tcore_pending_set_priority(pending, TCORE_PENDING_PRIORITY_DEFAULT);
-
-	tcore_pending_set_send_callback(pending, on_confirmation_modem_message_send, NULL);
-
-
-	tcore_hal_send_request(h, pending);
+	/* Send notification */
+	tcore_server_send_notification( tcore_plugin_ref_server(tcore_object_ref_plugin(co_modem)),
+		co_modem,
+		TNOTI_MODEM_POWER,
+		sizeof(struct tnoti_modem_power), &modem_power);
 
 	return TCORE_RETURN_SUCCESS;
 }
 
-static TReturn get_version(CoreObject *o, UserRequest *ur)
+static TReturn power_reset(CoreObject *co_modem, UserRequest *ur)
 {
-	TcorePlugin *p = NULL;
-	TcoreHal *h = NULL;
-	TcorePending *pending = NULL;
-	char*						cmd_str = NULL;
-	struct ATReqMetaInfo metainfo;
-	int info_len =0;
+	dbg("Modem Power RESET request: NOT supported!!!");
 
-	p = tcore_object_ref_plugin(o);
-	h = tcore_object_get_hal(o);
-
-	memset(&metainfo, 0, sizeof(struct ATReqMetaInfo));
-	metainfo.type = SINGLELINE;
-	memcpy(metainfo.responsePrefix,"+CGMR:",strlen("+CGMR:"));
-	info_len = sizeof(struct ATReqMetaInfo);
-
-	tcore_user_request_set_metainfo(ur, info_len, &metainfo);
-
-	cmd_str = g_strdup("AT+CGMR\r");
-
-	dbg("cmd : %s, prefix(if any) : %s, cmd_len : %d",cmd_str, "N/A", strlen(cmd_str));
-
-	pending = tcore_pending_new(o, ID_RESERVED_AT);
-	tcore_pending_set_request_data(pending, strlen(cmd_str), cmd_str);
-	free(cmd_str);
-	tcore_pending_set_timeout(pending, 0);
-	tcore_pending_set_response_callback(pending, on_response_version, NULL);
-	tcore_pending_link_user_request(pending, ur);
-	tcore_pending_set_priority(pending, TCORE_PENDING_PRIORITY_DEFAULT);
-
-	tcore_pending_set_send_callback(pending, on_confirmation_modem_message_send, NULL);
-
-	tcore_hal_send_request(h, pending);
-
-	return TCORE_RETURN_SUCCESS;
+	return TCORE_RETURN_ENOSYS;
 }
 
-static TReturn set_flight_mode(CoreObject *o, UserRequest *ur)
+static TReturn get_imei(CoreObject *co_modem, UserRequest *ur)
 {
-	TcorePlugin *p = NULL;
-	TcoreHal *h = NULL;
-	TcorePending *pending = NULL;
+	TReturn ret = TCORE_RETURN_FAILURE;
+
+	ret = tcore_prepare_and_send_at_request(co_modem,
+		"AT+CGSN", NULL,
+		TCORE_AT_NUMERIC,
+		ur,
+		on_response_modem_get_imei, NULL,
+		on_send_at_request, NULL, 0, NULL, NULL);
+	dbg("ret: [0x%x]", ret);
+
+	return ret;
+}
+
+static TReturn get_version(CoreObject *co_modem, UserRequest *ur)
+{
+	TReturn ret = TCORE_RETURN_FAILURE;
+
+	ret = tcore_prepare_and_send_at_request(co_modem, "AT+CGMR", NULL,
+		TCORE_AT_SINGLELINE,
+		ur,
+		on_response_modem_get_version, NULL,
+		on_send_at_request, NULL, 0, NULL, NULL);
+	dbg("ret: [0x%x]", ret);
+
+	return ret;
+}
+
+static TReturn set_flight_mode(CoreObject *co_modem, UserRequest *ur)
+{
+	gchar *at_cmd;
+	guint power_mode;
 	const struct treq_modem_set_flightmode *req_data;
-	char*						cmd_str = NULL;
-	struct ATReqMetaInfo metainfo;
-	int info_len =0;
-
-	p = tcore_object_ref_plugin(o);
-	h = tcore_object_get_hal(o);
+	TReturn ret = TCORE_RETURN_FAILURE;
 
 	req_data = tcore_user_request_ref_data(ur, NULL);
 
+	dbg("req_data->enable: [%d]", req_data->enable);
 	if (req_data->enable) {
-		dbg("Flight mode on/n");
-		cmd_str = g_strdup("AT+CFUN=0\r");
+		dbg("Flight mode - [ON]");
+		power_mode = 0;
+	} else {
+		dbg("Flight mode - [OFF]");
+		power_mode = 1;
 	}
-	else {
-		dbg("Flight mode off/n");
-		cmd_str = g_strdup("AT+CFUN=1\r");
-	}
 
-	memset(&metainfo, 0, sizeof(struct ATReqMetaInfo));
-	metainfo.type = NO_RESULT;
-	metainfo.responsePrefix[0] ='\0';
-	info_len = sizeof(struct ATReqMetaInfo);
+	/* AT-Command */
+	at_cmd = g_strdup_printf("AT+CFUN=%d", power_mode);
 
-	tcore_user_request_set_metainfo(ur, info_len, &metainfo);
+	ret = tcore_prepare_and_send_at_request(co_modem, at_cmd, NULL,
+		TCORE_AT_NO_RESULT,
+		ur,
+		on_response_modem_set_flight_mode, NULL,
+		on_send_at_request, NULL, 0, NULL, NULL);
+	dbg("ret: [0x%x]", ret);
 
-	dbg("cmd : %s, prefix(if any) : %s, cmd_len : %d",cmd_str, "N/A", strlen(cmd_str));
+	/* Free resources */
+	g_free(at_cmd);
 
-	pending = tcore_pending_new(o, ID_RESERVED_AT);
-	tcore_pending_set_request_data(pending, strlen(cmd_str), cmd_str);
-	free(cmd_str);
-	tcore_pending_set_timeout(pending, 0);
-	tcore_pending_set_response_callback(pending, on_response_set_flight_mode, o);
-	tcore_pending_link_user_request(pending, ur);
-	tcore_pending_set_priority(pending, TCORE_PENDING_PRIORITY_DEFAULT);
-
-	tcore_pending_set_send_callback(pending, on_confirmation_modem_message_send, NULL);
-
-	tcore_hal_send_request(h, pending);
-
-	return TCORE_RETURN_SUCCESS;
+	return ret;
 }
 
-static struct tcore_modem_operations modem_ops =
+static TReturn get_flight_mode(CoreObject *co_modem, UserRequest *ur)
 {
+	struct tresp_modem_get_flightmode resp_data;
+	TReturn ret;
+
+	memset(&resp_data, 0x0, sizeof(struct tresp_modem_get_flightmode));
+
+	resp_data.enable = tcore_modem_get_flight_mode_state(co_modem);
+	resp_data.result = TCORE_RETURN_SUCCESS;
+	dbg("Get Flight mode: Flight mdoe: [%s]", (resp_data.enable ? "ON" : "OFF"));
+
+	ret = tcore_user_request_send_response(ur,
+		TRESP_MODEM_GET_FLIGHTMODE,
+		sizeof(struct tresp_modem_get_flightmode), &resp_data);
+	dbg("ret: [0x%x]", ret);
+
+	return ret;
+}
+
+/** Modem operations */
+static struct tcore_modem_operations modem_ops = {
 	.power_on = power_on,
 	.power_off = power_off,
 	.power_reset = power_reset,
 	.set_flight_mode = set_flight_mode,
 	.get_imei = get_imei,
 	.get_version = get_version,
+	.get_flight_mode = get_flight_mode,
 };
 
-gboolean s_modem_init(TcorePlugin *cp, CoreObject *co)
+gboolean s_modem_init(TcorePlugin *p, TcoreHal *h)
 {
-	GQueue *work_queue;
-	struct TelMiscVersionInformation *vi_property;
-	struct TelMiscSNInformation *imei_property;
+	CoreObject *co_modem;
 
-	dbg("Entry");
+	co_modem = tcore_modem_new(p, "modem", &modem_ops, h);
+	if (!co_modem) {
+		err("Core object is NULL");
+		return FALSE;
+	}
 
-	tcore_modem_override_ops(co, &modem_ops);
+#if 0
+	tcore_object_add_callback(co_modem, EVENT_SYS_NOTI_MODEM_POWER, on_sys_event_modem_power, NULL);
+#endif
 
-	work_queue = g_queue_new();
-	tcore_object_link_user_data(co, work_queue);
-
-	tcore_object_override_callback(co, EVENT_SYS_NOTI_MODEM_POWER, on_sys_event_modem_power, NULL);
-	tcore_object_override_callback(co, EVENT_MODEM_PHONE_STATE, on_event_modem_phone_state, NULL);
-
-	vi_property = calloc(sizeof(struct TelMiscVersionInformation), 1);
-	tcore_plugin_link_property(cp, "VERSION", vi_property);
-
-	imei_property = calloc(sizeof(struct TelMiscSNInformation), 1);
-	tcore_plugin_link_property(cp, "IMEI", imei_property);
-
-	dbg("Exit");
+	tcore_object_add_callback(co_modem,
+		"+SCFUN:",
+		on_event_modem_phone_state, NULL);
 
 	return TRUE;
 }
 
-void s_modem_exit(TcorePlugin *cp, CoreObject *co)
+void s_modem_exit(TcorePlugin *p)
 {
-	GQueue *work_queue;
-	struct TelMiscVersionInformation *vi_property;
-	struct TelMiscSNInformation *imei_property;
+	CoreObject *co_modem;
 
-	work_queue = tcore_object_ref_user_data(co);
-	g_queue_free(work_queue);
+	if (!p) {
+		err("Plugin is NULL");
+		return;
+	}
 
-	vi_property = tcore_plugin_ref_property(cp, "VERSION");
-	if (vi_property)
-		free(vi_property);
+	co_modem = tcore_plugin_ref_core_object(p, CORE_OBJECT_TYPE_MODEM);
 
-	imei_property = tcore_plugin_ref_property(cp, "IMEI");
-	if (imei_property)
-		free(imei_property);
-
-	dbg("Exit");
+	tcore_modem_free(co_modem);
 }
 
-gboolean s_modem_send_poweron(TcorePlugin *cp)
+gboolean s_modem_send_poweron(TcorePlugin *p)
 {
-	UserRequest* ur;
-	TcoreHal* hal;
-	TcorePending *pending = NULL;
-	CoreObject *o;
+	CoreObject *co_modem = NULL;
+	UserRequest *ur = NULL;
+	TReturn ret = TCORE_RETURN_FAILURE;
 
-	char *cmd_str = NULL;
-	struct ATReqMetaInfo metainfo;
-	int info_len =0;
-
-	o = tcore_plugin_ref_core_object(cp, CORE_OBJECT_TYPE_MODEM);
+	co_modem = tcore_plugin_ref_core_object(p, CORE_OBJECT_TYPE_MODEM);
 	ur = tcore_user_request_new(NULL, NULL);
 
-	memset(&metainfo, 0, sizeof(struct ATReqMetaInfo));
-	metainfo.type = SINGLELINE;
-	memcpy(metainfo.responsePrefix,"+CPAS:",strlen("+CPAS:"));
-	info_len = sizeof(struct ATReqMetaInfo);
-	tcore_user_request_set_metainfo(ur, info_len, &metainfo);
+	ret = tcore_prepare_and_send_at_request(co_modem,
+		"AT+CPAS", "+CPAS",
+		TCORE_AT_SINGLELINE,
+		ur,
+		on_response_poweron, NULL,
+		on_send_at_request, NULL,
+		0, NULL, NULL);
+	if (ret != TCORE_RETURN_SUCCESS)
+		tcore_user_request_unref(ur);
 
-	cmd_str = g_strdup("AT+CPAS\r");
+	dbg("ret: [0x%x]", ret);
 
-	dbg("cmd : %s, prefix(if any) :%s, cmd_len : %d",cmd_str, metainfo.responsePrefix, strlen(cmd_str));
-
-	hal = tcore_object_get_hal(o);
-
-	pending = tcore_pending_new(o, ID_RESERVED_AT);
-	tcore_pending_set_request_data(pending, strlen(cmd_str), cmd_str);
-	free(cmd_str);
-	tcore_pending_set_timeout(pending, 0);
-	tcore_pending_set_response_callback(pending, on_response_poweron, NULL);
-	tcore_pending_link_user_request(pending, ur);
-	tcore_pending_set_priority(pending, TCORE_PENDING_PRIORITY_DEFAULT);
-
-	tcore_pending_set_send_callback(pending, on_confirmation_modem_message_send, NULL);
-
-	tcore_hal_send_request(hal, pending);
-
+	/* Free resources */
 	return TRUE;
-
 }

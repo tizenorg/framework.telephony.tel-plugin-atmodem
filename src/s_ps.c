@@ -39,495 +39,616 @@
 #include <user_request.h>
 #include <server.h>
 #include <util.h>
+#include <type/ps.h>
+#include <at.h>
 
 #include "s_common.h"
 #include "s_ps.h"
 
-#include "atchannel.h"
-#include "at_tok.h"
-
-extern struct ATResponse *sp_response;
-extern char *s_responsePrefix;
-extern enum ATCommandType s_type;
-
-static void on_confirmation_ps_message_send( TcorePending *p, gboolean result, void *user_data )
+static void __notify_context_status_changed(CoreObject *co_ps, guchar context_id, gint status)
 {
-	UserRequest* ur = NULL;
-	struct ATReqMetaInfo* metainfo = NULL;
-	unsigned int info_len =0;
-	dbg("on_confirmation_ps_message_send - msg out from queue. alloc ATRsp buffer & write rspPrefix if needed\n");
-
-	ReleaseResponse(); // release leftover
-    //alloc new sp_response
-	sp_response = at_response_new();
-
-	ur = tcore_pending_ref_user_request(p);
-	metainfo = (struct ATReqMetaInfo*)tcore_user_request_ref_metainfo(ur,&info_len);
-
-	if ((metainfo->type == SINGLELINE)||(metainfo->type == MULTILINE))	{
-		//cp rsp prefix
-		s_responsePrefix = strdup(metainfo->responsePrefix);
-		dbg("duplicating responsePrefix : %s\n", s_responsePrefix);
-	}
-	else {
-		s_responsePrefix = NULL;
-	}
-
-	//set atcmd type into s_type
-	s_type = metainfo->type;
-
-	if (result == FALSE) {
-		/* Fail */
-		dbg("SEND FAIL");
-	}
-	else {
-		dbg("SEND OK");
-	}
-}
-
-static void on_setup_pdp(CoreObject *co_ps, int result,
-			const char *netif_name, void *user_data)
-{
-	CoreObject *ps_context = user_data;
-	struct tnoti_ps_call_status data_status = {0};
 	Server *server;
+	struct tnoti_ps_call_status ps_call_status;
 
 	dbg("Entry");
 
-	if (result < 0) {
-		/* Deactivate PDP context */
-		tcore_ps_deactivate_context(co_ps, ps_context, NULL);
-		return;
-	}
+	ps_call_status.context_id = (guint)context_id;
+	ps_call_status.state = status;
+	ps_call_status.result = TCORE_RETURN_SUCCESS;
 
-	dbg("Device name: [%s]", netif_name);
+	dbg("Sending PS Call Status Notification - Context ID: [%d] Context State: [%d]",
+					ps_call_status.context_id, ps_call_status.state);
 
-	/* Set Device name */
-	tcore_context_set_ipv4_devname(ps_context, netif_name);
-
-	/* Set State - CONNECTED */
-	data_status.context_id = tcore_context_get_id(ps_context);
-	data_status.state = PS_DATA_CALL_CONNECTED;
-	dbg("Sending Call Status Notification - Context ID: [%d] Context State: [CONNECTED]", data_status.context_id);
-
-	/* Send Notification */
+	/* Send PS CALL Status Notification */
 	server = tcore_plugin_ref_server(tcore_object_ref_plugin(co_ps));
 	tcore_server_send_notification(server, co_ps,
-					TNOTI_PS_CALL_STATUS,
-					sizeof(struct tnoti_ps_call_status),
-					&data_status);
+			TNOTI_PS_CALL_STATUS,
+			sizeof(struct tnoti_ps_call_status),
+			&ps_call_status);
 
 	dbg("Exit");
 }
 
-static void on_event_ps_ipconfiguration(CoreObject *o, const void *event_info, void *user_data)
+static void on_response_undefine_context_cmd(TcorePending *p,
+	int data_len, const void *data, void *user_data)
 {
-	/* Parsing the response line and map into noti. */
-	CoreObject *ps_context = (CoreObject *)user_data;
-	unsigned int cid = tcore_context_get_id(ps_context);
-	struct ATLine *p_cur = NULL;
-	const struct ATResponse *p_response = event_info;
-	int err, p_cid = 0, d_comp = -1, h_comp = -1;
-	char *pdp_type = NULL, *apn = NULL;
-	char *line = NULL, *ip = NULL;
-	TcoreHal *h = tcore_object_get_hal(o);
+	const TcoreATResponse *resp = data;
 
-	for (p_cur = p_response->p_intermediates; p_cur != NULL;
-			p_cur = p_cur->p_next) {
-		line = p_response->p_intermediates->line;
+	dbg("Entered");
 
-		err = at_tok_start(&line);
-		err = at_tok_nextint(&line,&p_cid);
-		dbg("cid: %d", p_cid);
-
-		/* Send IP Configuration noti only on the requested CID. */
-		if (p_cid && (cid == (unsigned int)p_cid))	{
-			err = at_tok_nextstr(&line,&pdp_type);
-			dbg("PDP type: %s", pdp_type);
-
-			if (pdp_type != NULL)	{
-				err = at_tok_nextstr(&line,&apn);
-				dbg("APN: %s", apn);
-			}
-			if (apn != NULL) {
-				err = at_tok_nextstr(&line,&ip);
-				dbg("IP address: %s", ip);
-			}
-			if (ip != NULL) {
-				err = at_tok_nextint(&line,&d_comp);
-				dbg("d_comp: %d", d_comp);
-			}
-			if (d_comp != -1) {
-				err = at_tok_nextint(&line,&h_comp);
-				dbg("h_comp: %d", h_comp);
-			}
-
-			(void)tcore_context_set_ipv4_addr(ps_context, (const char *)ip);
-
-			dbg("ip = [%s]", ip);
-
-			(void)tcore_context_set_ipv4_addr(ps_context, (const char *)ip);
-
-			dbg("Adding default DNS pri: 8.8.8.8 sec: 8.8.4.4");
-
-			tcore_context_set_ipv4_dns(ps_context, "8.8.8.8", "8.8.4.4");
-
-			/* Mount network interface */
-			if (tcore_hal_setup_netif(h, o, on_setup_pdp, ps_context, cid, TRUE)
-					!= TCORE_RETURN_SUCCESS) {
-				err("Setup network interface failed");
-				return;
-			}
-		} else {
-			dbg("No matched response with CID: %d", cid);
-			tcore_context_set_state(ps_context, CONTEXT_STATE_DEACTIVATED);
-		}
+	if (resp && resp->success) {
+		dbg("Response Ok");
+		return;
 	}
+	dbg("Response NOk");
 }
 
-static void on_response_get_ipconfiguration(TcorePending *pending, int data_len, const void *data, void *user_data)
+static void __send_undefine_context_cmd(CoreObject *co_ps, CoreObject *ps_context)
 {
-	struct ATLine *p_cur;
-	CoreObject *ps_context = (CoreObject *)user_data;
-	char *line = NULL;
+	char *at_cmd;
+	int context_id = 0;
+	TReturn ret;
 
-	printResponse();
+	dbg("Entered");
 
-	if (sp_response->success > 0) {
-		dbg("RESPONSE OK");
+	/*Getting Context ID from Core Object*/
+	context_id = tcore_context_get_id(ps_context);
 
-		for (p_cur = sp_response->p_intermediates
-				; p_cur != NULL
-				; p_cur = p_cur->p_next) {
-			line = sp_response->p_intermediates->line;
-			dbg("%s\n", line);
-		}
+	at_cmd = g_strdup_printf("AT+CGDCONT=0,%d", context_id);
 
-		dbg("Call on_ipc_event_ps_ipconfiguration");
-		on_event_ps_ipconfiguration(tcore_pending_ref_core_object(pending), sp_response, ps_context);
-	}
-	else {
-		dbg("RESPONSE NOK");
-		tcore_context_set_state(ps_context, CONTEXT_STATE_DEACTIVATED);
-	}
+	/* Send Request to modem */
+	ret = tcore_prepare_and_send_at_request(co_ps,
+		at_cmd, NULL,
+		TCORE_AT_NO_RESULT,
+		NULL,
+		on_response_undefine_context_cmd, NULL,
+		on_send_at_request, NULL,
+		0, NULL, NULL);
+	dbg("ret: [0x%x]", ret);
 
-	ReleaseResponse();
+	/* Free resource */
+	g_free(at_cmd);
+
+	return;
 }
 
-static void on_response_ps_attached(TcorePending *p, int data_len, const void *data, void *user_data)
-{
-	TcorePlugin *pl = NULL;
-	TcoreHal *h = NULL;
-	TcorePending *pending = NULL;
-	CoreObject *o = tcore_pending_ref_core_object(p);
-	CoreObject *ps_context = (CoreObject *)user_data;
-	UserRequest *ur;
-
-	char* cmd_str = NULL;
-	struct ATReqMetaInfo metainfo;
-	int info_len =0;
-	char* line = NULL;
-
-	printResponse();
-
-	if (sp_response->success > 0) {
-		dbg("RESPONSE OK");
-		line = sp_response->p_intermediates->line;
-		dbg("on_response_ps_attached: %s", line);
-
-		ur = tcore_user_request_new(NULL, NULL);
-		memset(&metainfo, 0, sizeof(struct ATReqMetaInfo));
-		memcpy(metainfo.responsePrefix,"+CGDCONT:",strlen("+CGDCONT:"));
-		metainfo.type = MULTILINE;
-		info_len = sizeof(struct ATReqMetaInfo);
-
-		tcore_user_request_set_metainfo(ur, info_len, &metainfo);
-
-		dbg(" Send: AT+CGDCONT?\r ");
-		cmd_str = g_strdup("AT+CGDCONT?\r");
-
-		pl = tcore_object_ref_plugin(o);
-		h = tcore_object_get_hal(o);
-		pending = tcore_pending_new(o, ID_RESERVED_AT);
-		tcore_pending_set_request_data(pending, strlen(cmd_str), cmd_str);
-		free(cmd_str);
-
-		tcore_pending_set_timeout(pending, 0);
-		tcore_pending_set_response_callback(pending, on_response_get_ipconfiguration, ps_context);
-		tcore_pending_link_user_request(pending, ur);
-		tcore_pending_set_priority(pending, TCORE_PENDING_PRIORITY_DEFAULT);
-		tcore_pending_set_send_callback(pending, on_confirmation_ps_message_send, NULL);
-		tcore_hal_send_request(h, pending);
-	}
-	else {
-		dbg("RESPONSE NOK");
-		tcore_context_set_state(ps_context, CONTEXT_STATE_DEACTIVATED);
-	}
-
-	ReleaseResponse();
-}
-
-static void on_response_active_set(TcorePending *p, int data_len, const void *data, void *user_data)
-{
-	TcorePlugin *pl = NULL;
-	TcoreHal *h = NULL;
-	TcorePending *pending = NULL;
-	CoreObject *o = tcore_pending_ref_core_object(p);
-	CoreObject *ps_context = (CoreObject *)user_data;
-	UserRequest *ur;
-
-	char* cmd_str = NULL;
-	struct ATReqMetaInfo metainfo;
-	int info_len =0;
-
-	printResponse();
-
-	if (sp_response->success > 0) {
-		dbg("RESPONSE OK");
-
-		ur = tcore_user_request_new(NULL, NULL);
-		memset(&metainfo, 0, sizeof(struct ATReqMetaInfo));
-		metainfo.type = SINGLELINE;
-		info_len = sizeof(struct ATReqMetaInfo);
-
-		tcore_user_request_set_metainfo(ur, info_len, &metainfo);
-
-		dbg(" Send: ATD*99***1#\r ");
-		cmd_str = g_strdup("ATD*99***1#\r");
-
-		pl = tcore_object_ref_plugin(o);
-		h = tcore_object_get_hal(o);
-		pending = tcore_pending_new(o, ID_RESERVED_AT);
-
-		tcore_pending_set_request_data(pending, strlen(cmd_str), cmd_str);
-		free(cmd_str);
-
-		tcore_pending_set_timeout(pending, 0);
-		tcore_pending_set_response_callback(pending, on_response_ps_attached, ps_context);
-		tcore_pending_link_user_request(pending, ur);
-		tcore_pending_set_priority(pending, TCORE_PENDING_PRIORITY_DEFAULT);
-		tcore_pending_set_send_callback(pending, on_confirmation_ps_message_send, NULL);
-		tcore_hal_send_request(h, pending);
-	}
-	else {
-		dbg("RESPONSE NOK");
-		tcore_context_set_state(ps_context, CONTEXT_STATE_DEACTIVATED);
-	}
-
-	ReleaseResponse();
-}
-
-static void on_response_deactive_set(TcorePending *p, int data_len, const void *data, void *user_data)
+static void __ps_setup_pdp(CoreObject *co_ps, gint result,
+	const gchar *netif_name, void *user_data)
 {
 	CoreObject *ps_context = user_data;
-	CoreObject *co_ps = tcore_pending_ref_core_object(p);
-	TcoreHal *h = tcore_object_get_hal(co_ps);
-	unsigned int cid = tcore_context_get_id(ps_context);
+	guchar context_id;
 
-	printResponse();
+	CHECK_AND_RETURN(ps_context != NULL);
 
-	if (sp_response->success > 0) {
-		dbg("RESPONSE OK");
-		if (tcore_hal_setup_netif(h, co_ps, NULL, ps_context, cid,
-				FALSE) != TCORE_RETURN_SUCCESS)
-			err("Failed to disable network interface");
+	dbg("Enter");
 
-		tcore_context_set_state(ps_context, CONTEXT_STATE_DEACTIVATED);
-	}
-	else {
-		dbg("RESPONSE NOK");
+	if (result < 0) {
+		err("Failed to setup PDP");
+
+		/* Deactivate PDP context */
+		__send_undefine_context_cmd(co_ps, ps_context);
+
+		return;
 	}
 
-	ReleaseResponse();
+	dbg("devname = [%s]", netif_name);
+
+	context_id = tcore_context_get_id(ps_context);
+	dbg("Context ID : %d", context_id);
+
+	__notify_context_status_changed(co_ps, context_id, 1);
+
+	dbg("Exit");
 }
 
+static void __on_response_get_ipconfiguration(TcorePending *p,
+	int data_len, const void *data, void *user_data)
+{
+	CoreObject *co_ps = tcore_pending_ref_core_object(p);
+	CoreObject *ps_context = user_data;
+	const TcoreATResponse *at_resp = data;
+	guchar context_id;
+	GSList *p_cur = NULL;
+
+	context_id = tcore_context_get_id(ps_context);
+	dbg("Context ID : %d", context_id);
+
+	if (at_resp && at_resp->success) {
+		for (p_cur = at_resp->lines; p_cur != NULL; p_cur = p_cur->next) {
+			const gchar *line;
+			GSList *tokens = NULL;
+
+			line = (const char *) p_cur->data;
+			tokens = tcore_at_tok_new(line);
+
+			if (g_slist_length(tokens) >= 2) {
+				gchar *pdp_type = NULL, *apn = NULL;
+				gchar *ip = NULL, *pdp_address = NULL, *p_cid = NULL;
+
+				p_cid = g_slist_nth_data(tokens, 0);
+				dbg("cid: %d", p_cid);
+
+				/* Send IP Configuration noti only on the requested CID. */
+				if (atoi(p_cid) && (context_id == (unsigned int)atoi(p_cid))) {
+					TcoreHal *hal = tcore_object_get_hal(co_ps);
+
+					pdp_type = g_slist_nth_data(tokens, 1);
+					dbg("PDP type: %s", pdp_type);
+
+					if (pdp_type != NULL)	{
+						apn = g_slist_nth_data(tokens, 2);
+						dbg("APN: %s", apn);
+					}
+					if (apn != NULL) {
+						ip = g_slist_nth_data(tokens, 3);
+						pdp_address = tcore_at_tok_extract(ip);
+						dbg("IP address: %s", ip);
+					}
+
+					(void)tcore_context_set_address(ps_context, (const char*)pdp_address);
+					g_free(pdp_address);
+
+					dbg("Adding default DNS pri: 8.8.8.8 sec: 8.8.4.4");
+
+					tcore_context_set_dns1(ps_context, "8.8.8.8");
+					tcore_context_set_dns2(ps_context, "8.8.4.4");
+
+					/* Mount network interface */
+					if (tcore_hal_setup_netif(hal, co_ps, __ps_setup_pdp, ps_context, context_id, TRUE)
+							!= TCORE_RETURN_SUCCESS) {
+						err("Setup network interface failed");
+						return;
+					}
+				} else {
+					err("No matched response with CID: %d", atoi(p_cid));
+				}
+			}
+		}
+	}else {
+		err("Response NOK");
+
+		context_id = tcore_context_get_id(ps_context);
+		dbg("Context ID : %d", context_id);
+
+		__notify_context_status_changed(co_ps, context_id, 3);
+	}
+}
+
+static void __get_ipconfiguration(CoreObject *co_ps, CoreObject *ps_context)
+{
+	TReturn ret;
+
+	dbg("Enter");
+
+	/* Send Request to modem */
+	ret = tcore_prepare_and_send_at_request(co_ps,
+		"AT+CGDCONT?", NULL,
+		TCORE_AT_NO_RESULT,
+		NULL,
+		__on_response_get_ipconfiguration,
+		ps_context,
+		on_send_at_request, NULL,
+		0, NULL, NULL);
+	if (ret != TCORE_RETURN_SUCCESS){
+		err("Failed to prepare and send AT request");
+
+		/* Deactivate PDP context */
+		__send_undefine_context_cmd(co_ps, ps_context);
+	}
+
+	dbg("Exit");
+}
+
+static void __on_response_attach_ps(TcorePending *p,
+	int data_len, const void *data, void *user_data)
+{
+	CoreObject *co_ps = tcore_pending_ref_core_object(p);
+	CoreObject *ps_context = user_data;
+	const TcoreATResponse *at_resp = data;
+	guchar context_id;
+
+	CHECK_AND_RETURN(at_resp != NULL);
+	CHECK_AND_RETURN(ps_context != NULL);
+
+	if (at_resp && at_resp->success) {
+		__get_ipconfiguration(co_ps, ps_context);
+		return;
+	}
+
+	err("Response NOK");
+
+	context_id = tcore_context_get_id(ps_context);
+	dbg("Context ID : %d", context_id);
+
+	__notify_context_status_changed(co_ps, context_id, 3);
+
+	dbg("Exit");
+}
+
+static void __attach_ps(CoreObject *co_ps, CoreObject *ps_context)
+{
+	TReturn ret;
+
+	dbg("Enter");
+
+	/* Send Request to modem */
+	ret = tcore_prepare_and_send_at_request(co_ps,
+		"ATD*99***1#", NULL,
+		TCORE_AT_NO_RESULT,
+		NULL,
+		__on_response_attach_ps, ps_context,
+		on_send_at_request, NULL,
+		0, NULL, NULL);
+	if (ret != TCORE_RETURN_SUCCESS){
+		err("Failed to prepare and send AT request");
+
+		/* Deactivate PDP context */
+		__send_undefine_context_cmd(co_ps, ps_context);
+	}
+
+	dbg("Exit");
+}
+
+static void on_response_ps_activate_context(TcorePending *p,
+	gint data_len, const void *data, void *user_data)
+{
+	CoreObject *co_ps = tcore_pending_ref_core_object(p);
+	const TcoreATResponse *at_resp = data;
+	CoreObject *ps_context = user_data;
+
+	dbg("Enter");
+
+	CHECK_AND_RETURN(at_resp != NULL);
+	CHECK_AND_RETURN(ps_context != NULL);
+
+	if (at_resp && at_resp->success) {
+		dbg("Response OK");
+		__attach_ps(co_ps, ps_context);
+	} else {
+		guchar context_id;
+
+		err("Response NOK");
+
+		context_id = tcore_context_get_id(ps_context);
+		dbg("Context ID : %d", context_id);
+
+		__notify_context_status_changed(co_ps, context_id, 3);
+	}
+
+	dbg("Exit");
+}
+
+static void on_response_ps_deactivate_context(TcorePending *p,
+	gint data_len, const void *data, void *user_data)
+{
+	CoreObject *co_ps = tcore_pending_ref_core_object(p);
+	TcoreHal *hal = tcore_object_get_hal(co_ps);
+	const TcoreATResponse *at_resp = data;
+	CoreObject *ps_context = user_data;
+	guchar context_id;
+
+	dbg("Enter");
+
+	CHECK_AND_RETURN(at_resp != NULL);
+	CHECK_AND_RETURN(ps_context != NULL);
+
+	context_id = tcore_context_get_id(ps_context);
+	dbg("Context ID : %d", context_id);
+
+	/*
+	 * AT+CGACT = 0 is returning NO CARRIER or an error. Just test if the
+	 * response contains NO CARRIER else decode CME error.
+	 */
+	if (at_resp && at_resp->success) {
+		const gchar *line;
+
+		line = (const gchar *)at_resp->lines->data;
+		if (g_strcmp0(line, "NO CARRIER") != 0) {
+			err("%s", line);
+			err("Context %d has not been deactivated", context_id);
+
+			goto out;
+		}
+	}
+
+	__notify_context_status_changed(co_ps, context_id, 3);
+
+	if (tcore_hal_setup_netif(hal, co_ps, NULL, NULL, context_id, FALSE) != TCORE_RETURN_SUCCESS)
+		err("Failed to disable network interface");
+
+out:
+	dbg("Exit");
+}
+
+static void on_response_ps_define_context(TcorePending *p,
+	gint data_len, const void *data, void *user_data)
+{
+	const TcoreATResponse *at_resp = data;
+	CoreObject *ps_context = (CoreObject *) user_data;
+	CoreObject *co_ps = tcore_pending_ref_core_object(p);
+	guchar context_id;
+	gint curr_call_status;
+
+	dbg("entry");
+
+	CHECK_AND_RETURN(at_resp != NULL);
+	CHECK_AND_RETURN(ps_context != NULL);
+
+	if (at_resp && at_resp->success) {
+		dbg("Response OK");
+		curr_call_status = 0;
+		tcore_context_set_state(co_ps, CONTEXT_STATE_ACTIVATED);
+	}else {
+		err("ERROR[%s]",at_resp->final_response);
+		curr_call_status = 3;
+	}
+
+	context_id = tcore_context_get_id(ps_context);
+	dbg("Context ID : %d", context_id);
+
+	__notify_context_status_changed(co_ps, context_id, curr_call_status);
+}
+
+/*
+ * Operation - PDP Context Activate
+ *
+ * Request -
+ * AT-Command: AT+CGACT= [<state> [, <cid> [, <cid> [,...]]]]
+ *
+ * where,
+ * <state>
+ * indicates the state of PDP context activation
+ *
+ * 1 activated
+ *
+ * <cid>
+ * It is a numeric parameter which specifies a particular PDP context definition
+ *
+ * Response -
+ * Success: (No Result)
+ *	OK
+ * Failure:
+ *	+CME ERROR: <error>
+ */
 static TReturn activate_ps_context(CoreObject *o, CoreObject *ps_context, void* user_data)
 {
-	TcorePlugin *p = NULL;
-	TcoreHal *h = NULL;
-	TcorePending *pending = NULL;
-	UserRequest *ur;
+	gchar *at_cmd = NULL;
+	TReturn ret;
+	guchar context_id;
 
-	unsigned int cid;
-	char* cmd_str = NULL;
-	struct ATReqMetaInfo metainfo;
-	int info_len =0;
+	dbg("Entry");
 
-	if ( !o )
-		return TCORE_RETURN_FAILURE;
+	context_id = tcore_context_get_id(ps_context);
+	dbg("Context ID : %d", context_id);
 
-	p = tcore_object_ref_plugin(o);
-	h = tcore_object_get_hal(o);
+	at_cmd = g_strdup_printf("AT+CGACT=1,%d", context_id);
+	dbg(" at command : %s", at_cmd);
 
+	/* Send Request to modem */
+	ret = tcore_prepare_and_send_at_request(o,
+		at_cmd, NULL,
+		TCORE_AT_NO_RESULT,
+		NULL,
+		on_response_ps_activate_context, ps_context,
+		on_send_at_request, NULL,
+		0, NULL, NULL);
+	if (ret != TCORE_RETURN_SUCCESS){
+		err("AT request failed. Send notification for call status [DISCONNECTED]");
 
-	ur = tcore_user_request_new(NULL, NULL);
-	memset(&metainfo, 0, sizeof(struct ATReqMetaInfo));
-	metainfo.type = NO_RESULT;
-	info_len = sizeof(struct ATReqMetaInfo);
+		__notify_context_status_changed(o, context_id, 3);
+	}
+	g_free(at_cmd);
+	dbg("Exit");
 
-	tcore_user_request_set_metainfo(ur, info_len, &metainfo);
-
-	cid = tcore_context_get_id(ps_context);
-
-	dbg("Example: AT+CGACT=1,0");
-	cmd_str = g_strdup_printf("%s=%d,%d%s","AT+CGACT", 1, cid, "\r");
-
-	pending = tcore_pending_new(o, ID_RESERVED_AT);
-	tcore_pending_set_request_data(pending, strlen(cmd_str), cmd_str);
-	free(cmd_str);
-
-	tcore_pending_set_timeout(pending, 0);
-	tcore_pending_set_response_callback(pending, on_response_active_set, ps_context);
-	tcore_pending_link_user_request(pending, ur);
-	tcore_pending_set_priority(pending, TCORE_PENDING_PRIORITY_DEFAULT);
-	tcore_pending_set_send_callback(pending, on_confirmation_ps_message_send, NULL);
-	tcore_hal_send_request(h, pending);
-
-	return TRUE;
+	return ret;
 }
 
-static void on_response_define_pdp(TcorePending *p, int data_len, const void *data, void *user_data)
+/*
+ * Operation - PDP Context Deactivate
+ *
+ * Request -
+ * AT-Command: AT+CGACT= [<state> [, <cid> [, <cid> [,...]]]]
+ *
+ * where,
+ * <state>
+ * indicates the state of PDP context activation
+ *
+ * 0 deactivated
+ *
+ * <cid>
+ * It is a numeric parameter which specifies a particular PDP context definition
+ *
+ * Response -
+ * Success: (No Result)
+ *	OK
+ * Failure:
+ *	+CME ERROR: <error>
+ */
+static TReturn deactivate_ps_context(CoreObject *o, CoreObject *ps_context, void* user_data)
 {
-	//CoreObject *ps_context = user_data;
+	gchar *at_cmd = NULL;
+	TReturn ret;
+	guchar context_id;
 
-	printResponse();
+	dbg("Entry");
 
-	if (sp_response->success > 0) {
-		dbg("RESPONSE OK");
-		//pdp_active_set(tcore_pending_ref_core_object(p), ps_context);
+	context_id = tcore_context_get_id(ps_context);
+	dbg("Context ID : %d", context_id);
+
+	at_cmd = g_strdup_printf("AT+CGACT=0,%d", context_id);
+	dbg(" at command : %s", at_cmd);
+
+	/* Send Request to modem */
+	ret = tcore_prepare_and_send_at_request(o,
+		at_cmd, NULL,
+		TCORE_AT_NO_RESULT,
+		NULL,
+		on_response_ps_deactivate_context, ps_context,
+		on_send_at_request, NULL,
+		0, NULL, NULL);
+	if (ret != TCORE_RETURN_SUCCESS){
+		err("AT request failed. Send notification for call status [DISCONNECTED]");
+		__notify_context_status_changed(o, context_id, 3);
 	}
-	else {
-		dbg("RESPONSE NOK");
-		tcore_context_set_state(tcore_pending_ref_core_object(p), CONTEXT_STATE_DEACTIVATED);
-	}
+	g_free(at_cmd);
+	dbg("Exit");
 
-	ReleaseResponse();
+	return ret;
 }
 
+/*
+ * Operation - Define PDP Context
+ *
+ * Request -
+ * AT-Command: AT+CGDCONT= [<cid> [, <PDP_type> [, <APN> [, <PDP_addr> [,
+ * <d_comp> [, <h_comp> [, <pd1> [... [, pdN]]]]]]]]]
+ * where,
+ * <cid>
+ * It is a numeric parameter, which specifies a particular PDP context definition
+ *
+ * <PDP_type>
+ * "IP" Internet Protocol (IETF STD 5)
+ * "IPV6" Internet Protocol, version 6 (IETF RFC 2460)
+ * "IPV4V6" Virtual <PDP_type>introduced to handle dual IP stack UE capability (see 3GPP
+ *  TS 24.301[83])
+ *
+ * <APN>
+ * Access Point Name
+ *
+ * <PDP_address>
+ * It is the string parameter that identifies the MT in the address space applicable to the PDP
+ * The allocated address may be read using the command +CGPADDR command
+ *
+ * <d_comp>
+ * A numeric parameter that controls PDP data compression
+ * 0 off
+ * 1 on
+ * 2 V.42 bis
+ *
+ * <h_comp>
+ * A numeric parameter that controls PDP header compression
+ * 0 off
+ * 1 on
+ * 2 RFC1144
+ * 3 RFC2507
+ * 4 RFC3095
+ *
+ * <pd1>...<pdN>
+ * zero to N string parameters whose meanings are specific to the <PDP_type>
+ *
+ * Response -
+ * Success: (No Result)
+ *	OK
+ * Failure:
+ *	+CME ERROR: <error>
+ */
 static TReturn define_ps_context(CoreObject *o, CoreObject *ps_context, void *user_data)
 {
-	TcorePlugin *p = NULL;
-	TcoreHal *h = NULL;
-	TcorePending *pending = NULL;
-	UserRequest *ur;
+	guchar context_id = 0;
+	gchar *at_cmd = NULL;
+	gchar *apn = NULL;
+	gchar *pdp_type_str = NULL;
+	gint pdp_type;
+	gint d_comp;
+	gint h_comp;
+	TReturn ret = TCORE_RETURN_FAILURE;
 
-	char *apn=NULL, *addr=NULL;
+	dbg("Entry");
 
-	unsigned int cid;
-	enum co_context_type pdp_type;
-	enum co_context_d_comp d_comp;
-	enum co_context_h_comp h_comp;
-	char *cmd_str = NULL;
-	struct ATReqMetaInfo metainfo;
-	int info_len =0;
-
-	if ( !o )
-		return TCORE_RETURN_FAILURE;
-
-	p = tcore_object_ref_plugin(o);
-	h = tcore_object_get_hal(o);
-    ur = tcore_user_request_new(NULL, NULL);
-	memset(&metainfo, 0, sizeof(struct ATReqMetaInfo));
-	metainfo.type = NO_RESULT;
-	info_len = sizeof(struct ATReqMetaInfo);
-
-	tcore_user_request_set_metainfo(ur, info_len, &metainfo);
-
-	cid = tcore_context_get_id(ps_context);
+	context_id = tcore_context_get_id(ps_context);
+	dbg("Context ID : %d", context_id);
 	pdp_type = tcore_context_get_type(ps_context);
+	dbg("PDP Type : %d", pdp_type);
+
+	switch (pdp_type) {
+	case CONTEXT_TYPE_X25:
+		dbg("CONTEXT_TYPE_X25");
+		pdp_type_str = g_strdup("X.25");
+	break;
+
+	case CONTEXT_TYPE_IP:
+		dbg("CONTEXT_TYPE_IP");
+		pdp_type_str = g_strdup("IP");
+	break;
+
+	case CONTEXT_TYPE_PPP:
+		dbg("CONTEXT_TYPE_PPP");
+		pdp_type_str = g_strdup("PPP");
+	break;
+
+	case CONTEXT_TYPE_IPV6:
+		dbg("CONTEXT_TYPE_IPV6");
+		pdp_type_str = g_strdup("IPV6");
+	break;
+
+	default:
+		/*PDP Type not supported*/
+		dbg("Unsupported PDP type: %d", pdp_type);
+		goto error;
+	}
+
 	d_comp = tcore_context_get_data_compression(ps_context);
 	h_comp = tcore_context_get_header_compression(ps_context);
+	apn = tcore_context_get_apn(ps_context);
 
-	dbg("Example: AT+CGDCONT=1,\"IP\",\"www.example.co.kr\",,0,0");
-	cmd_str = g_strdup_printf("AT+CGDCONT=%d,\"%d\",\"%s\",%s,%d,%d%s",
-			cid, pdp_type, apn, addr, d_comp, h_comp, "\r");
+	/* AT-Command */
+	at_cmd = g_strdup_printf("AT+CGDCONT=%d,\"%s\",\"%s\",,%d,%d",
+		context_id, pdp_type_str, apn, d_comp, h_comp);
+	dbg("AT-Command : %s", at_cmd);
 
-	pending = tcore_pending_new(o, ID_RESERVED_AT);
-	tcore_pending_set_request_data(pending, strlen(cmd_str), cmd_str);
-	free(cmd_str);
+	/* Send Request to modem */
+	ret = tcore_prepare_and_send_at_request(o,
+		at_cmd, NULL,
+		TCORE_AT_NO_RESULT,
+		NULL,
+		on_response_ps_define_context, ps_context,
+		on_send_at_request, NULL,
+		0, NULL, NULL);
 
-	tcore_pending_set_timeout(pending, 0);
-	tcore_pending_set_response_callback(pending, on_response_define_pdp, ps_context);
-	tcore_pending_link_user_request(pending, ur);
-	tcore_pending_set_priority(pending, TCORE_PENDING_PRIORITY_DEFAULT);
-	tcore_pending_set_send_callback(pending, on_confirmation_ps_message_send, NULL);
-	tcore_hal_send_request(h, pending);
+	g_free(pdp_type_str);
+	g_free(at_cmd);
+	g_free(apn);
 
-	return TCORE_RETURN_SUCCESS;
+	if (ret == TCORE_RETURN_SUCCESS)
+		goto out;
+
+error:
+	err("Failed to prepare and send AT request");
+	__notify_context_status_changed(o, context_id, 3);
+
+out:
+	dbg("Exit");
+	return ret;
 }
 
-static TReturn deactivate_ps_context(CoreObject *o, CoreObject *ps_context, void *user_data)
-{
-	TcorePlugin *p = NULL;
-	TcoreHal *h = NULL;
-	TcorePending *pending = NULL;
-	UserRequest *ur;
-
-	unsigned int cid;
-	char* cmd_str = NULL;
-	struct ATReqMetaInfo metainfo;
-	int info_len =0;
-
-	if ( !o )
-		return TCORE_RETURN_FAILURE;
-
-	p = tcore_object_ref_plugin(o);
-	h = tcore_object_get_hal(o);
-	ur = tcore_user_request_new(NULL, NULL);
-
-	memset(&metainfo, 0, sizeof(struct ATReqMetaInfo));
-	metainfo.type = NO_RESULT;
-	info_len = sizeof(struct ATReqMetaInfo);
-
-	cid = tcore_context_get_id(ps_context);
-
-	dbg("Example: AT+CGACT=0,1");
-	cmd_str = g_strdup_printf("%s=%d,%d%s","AT+CGACT", 0, cid, "\r");
-
-	pending = tcore_pending_new(o, ID_RESERVED_AT);
-	tcore_pending_set_request_data(pending, strlen(cmd_str), cmd_str);
-	free(cmd_str);
-
-	tcore_pending_set_timeout(pending, 0);
-	tcore_pending_set_response_callback(pending, on_response_deactive_set, ps_context);
-	tcore_pending_link_user_request(pending, ur);
-	tcore_pending_set_priority(pending, TCORE_PENDING_PRIORITY_DEFAULT);
-	tcore_pending_set_send_callback(pending, on_confirmation_ps_message_send, NULL);
-	tcore_hal_send_request(h, pending);
-
-	return TCORE_RETURN_SUCCESS;
-}
-
-static struct tcore_ps_operations ps_ops =
-{
+/* PS Operations */
+static struct tcore_ps_operations ps_ops = {
 	.define_context = define_ps_context,
 	.activate_context = activate_ps_context,
 	.deactivate_context = deactivate_ps_context
 };
 
-gboolean s_ps_init(TcorePlugin *cp, CoreObject *co)
+
+gboolean s_ps_init(TcorePlugin *p, TcoreHal *h)
 {
-	GQueue *work_queue;
+	CoreObject *o;
 
 	dbg("Entry");
-
-	tcore_ps_override_ops(co, &ps_ops);
-
-	work_queue = g_queue_new();
-	tcore_object_link_user_data(co, work_queue);
+	o = tcore_ps_new(p, "umts_ps", &ps_ops, h);
+	if (!o)
+		return FALSE;
 
 	dbg("Exit");
-
 	return TRUE;
 }
 
-void s_ps_exit(TcorePlugin *cp, CoreObject *co)
+void s_ps_exit(TcorePlugin *p)
 {
-	GQueue *work_queue;
+	CoreObject *o;
 
-	work_queue = tcore_object_ref_user_data(co);
-	if (work_queue)
-		g_queue_free(work_queue);
+	o = tcore_plugin_ref_core_object(p, CORE_OBJECT_TYPE_PS);
+	CHECK_AND_RETURN(o != NULL);
 
+	tcore_ps_free(o);
 	dbg("Exit");
 }

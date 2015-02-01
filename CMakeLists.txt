@@ -17,26 +17,24 @@ ENDFOREACH(flag)
 
 INCLUDE_DIRECTORIES(${CMAKE_SOURCE_DIR}/include/)
 
-SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${EXTRA_CFLAGS} -Wextra -Wno-unused-parameter -Wno-missing-field-initializers -Wdeclaration-after-statement -Wmissing-declarations -Wredundant-decls -Wcast-align")
+SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${EXTRA_CFLAGS} -O2 -Werror -Wextra -Wno-unused-parameter -Wno-missing-field-initializers -Wdeclaration-after-statement -Wmissing-declarations -Wredundant-decls -Wcast-align -Wall -Wno-array-bounds -Wno-empty-body -Wno-ignored-qualifiers -Wshadow -Wwrite-strings -Wswitch-default -Wno-unused-but-set-parameter -Wno-unused-but-set-variable")
 
-ADD_DEFINITIONS("-DFEATURE_DLOG_DEBUG")
-ADD_DEFINITIONS("-DTCORE_LOG_TAG=\"TEL_PLUGIN_ATMODEM\"")
+ADD_DEFINITIONS("-DFEATURE_TLOG_DEBUG")
+ADD_DEFINITIONS("-DTCORE_LOG_TAG=\"ATMODEM\"")
 
 MESSAGE(${CMAKE_C_FLAGS})
 MESSAGE(${CMAKE_EXE_LINKER_FLAGS})
 
 SET(SRCS
-		src/desc_at.c
-		src/s_modem.c
-		src/s_common.c
-		src/s_network.c
-		src/s_sim.c
-		src/s_call.c
-		src/s_ps.c
-		src/s_sms.c
-		src/at_tok.c
-		src/atchannel.c
-		src/s_ss.c
+	src/desc_at.c
+	src/s_modem.c
+	src/s_common.c
+	src/s_network.c
+	src/s_sim.c
+	src/s_call.c
+	src/s_ps.c
+	src/s_sms.c
+	src/s_ss.c
 )
 
 

@@ -48,7 +48,6 @@
 
 char _util_unpackb(const char *src, int pos, int len);
 char _util_convert_byte_hexChar(char val);
-gboolean util_byte_to_hex(const char *byte_pdu, char *hex_pdu, int num_bytes);
 
 char _util_unpackb(const char *src, int pos, int len)
 {
@@ -108,14 +107,14 @@ void util_hex_dump(char *pad, int size, const void *data)
 	char buf[255] = {0, };
 	char hex[4] = {0, };
 	int i;
-	unsigned char *p;
+	unsigned const char *p;
 
 	if (size <= 0) {
 		msg("%sno data", pad);
 		return;
 	}
 
-	p = (unsigned char *)data;
+	p = (unsigned const char *)data;
 
 	snprintf(buf, 255, "%s%04X: ", pad, 0);
 	for (i = 0; i<size; i++) {
@@ -139,9 +138,16 @@ void util_hex_dump(char *pad, int size, const void *data)
 
 void hook_hex_dump(enum direction_e d, int size, const void *data)
 {
-	msg("=== TX data DUMP =====");
-	util_hex_dump("          ", size, data);
-	msg("=== TX data DUMP =====");
+	char *direction;
+
+	if (d == TX)
+		direction = (char *)"TX";
+	else
+		direction = (char *)"RX";
+
+	msg("=== %s data DUMP =====", direction);
+	util_hex_dump((char *)"          ", size, data);
+	msg("=== %s data DUMP =====", direction);
 
 }
 
@@ -268,5 +274,12 @@ char * util_hexStringToBytes(char * s)
 	}
 
 	return ret;
+}
+
+void on_send_at_request(TcorePending *p,
+	gboolean send_status, void *user_data)
+{
+	dbg("Send - [%s]",
+		(send_status == TRUE ? "OK" : "NOK"));
 }
 
