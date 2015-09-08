@@ -94,6 +94,23 @@ struct work_queue_data {
 #define UTIL_ID(hdr)		((hdr).main_cmd << 8 | (hdr).sub_cmd)
 #define UTIL_IDP(hdr)		((hdr)->main_cmd << 8 | (hdr)->sub_cmd)
 
+/* If condition fails it retuns 'ret_val' without asserting program  */
+#define CHECK_AND_RETURN_VALUE(cond, ret_val) \
+	do { \
+		if(!(cond)) { \
+			err("*** Condition (%s) Fails ***", #cond); \
+			return ret_val; \
+		} \
+	} while (0)
+
+#define CHECK_AND_RETURN(cond) \
+	do { \
+		if(!(cond)) { \
+			err("*** Condition (%s) Fails ***", #cond); \
+			return ; \
+		} \
+	} while (0)
+
 void			hook_hex_dump(enum direction_e d, int size, const void *data);
 unsigned int	util_assign_message_sequence_id(TcorePlugin *p);
 gboolean		util_add_waiting_job(GQueue *queue, unsigned int id, UserRequest *ur);
@@ -101,5 +118,9 @@ UserRequest*	util_pop_waiting_job(GQueue *queue, unsigned int id);
 void			util_hex_dump(char *pad, int size, const void *data);
 unsigned char	util_hexCharToInt(char c);
 char*		util_hexStringToBytes(char * s);
+gboolean util_byte_to_hex(const char *byte_pdu, char *hex_pdu, int num_bytes);
+
+void 		on_send_at_request(TcorePending *p,
+			TReturn send_status, void *user_data);
 
 #endif

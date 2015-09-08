@@ -1,6 +1,7 @@
 create table mcc_mnc_oper_list (id integer primary key, country char(3), mcc integer, mnc char(3), oper char(45) );
 BEGIN;
 insert into mcc_mnc_oper_list  (country, mcc, mnc, oper)  values ("__", 1, "01", "TEST");
+insert into mcc_mnc_oper_list  (country, mcc, mnc, oper)  values ("__", 111, "11", "SDK");
 insert into mcc_mnc_oper_list  (country, mcc, mnc, oper)  values ("GE", 289, "67", "Aquafon");
 insert into mcc_mnc_oper_list  (country, mcc, mnc, oper)  values ("GE", 289, "88", "A-Mobile");
 insert into mcc_mnc_oper_list  (country, mcc, mnc, oper)  values ("AF", 412, "01", "AWCC");
